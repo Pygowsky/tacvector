@@ -1,0 +1,20 @@
+# Block restricted GRID data & local databases from GitHub
+# Sky's The Limit 2026 hackathon data: licensed, must not be committed
+stl-hackathon-2026-grid-starter/
+*.zst
+*.jsonl
+*.parquet
+*.sqlite
+*.duckdb
+
+# Decompressed copies or extracts built from the data (adjust to your project)
+*.parquet
+*.sqlite
+*.duckdb
+
+# Block heavy Python/Node environment folders
+.venv/
+__pycache__/
+node_modules/
+# Local databases (may hold derived data)
+*.db
