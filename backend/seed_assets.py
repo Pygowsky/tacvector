@@ -3,7 +3,7 @@
 Stores, for every competitive map: minimap image URL, the world->minimap
 coordinate multipliers, and every callout with its world (x, y, z) position
 (plus the pre-computed normalised minimap position). Also stores agents with
-their ability icons and weapons with their credit costs.
+their ability icons, and weapons and gear (shields) with their credit costs.
 
 Usage:
     python seed_assets.py            # fetch + (re)build backend/tacvector.db
@@ -36,6 +36,7 @@ DROP TABLE IF EXISTS maps;
 DROP TABLE IF EXISTS agent_abilities;
 DROP TABLE IF EXISTS agents;
 DROP TABLE IF EXISTS weapons;
+DROP TABLE IF EXISTS gear;
 
 CREATE TABLE maps (
     uuid            TEXT PRIMARY KEY,
@@ -92,6 +93,14 @@ CREATE TABLE weapons (
     display_icon  TEXT,
     kill_icon     TEXT
 );
+
+CREATE TABLE gear (
+    uuid         TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,  -- e.g. "Heavy Armor" (GRID calls it "heavyshield")
+    slug         TEXT NOT NULL UNIQUE,
+    cost         INTEGER,
+    display_icon TEXT
+);
 """
 
 
@@ -134,6 +143,7 @@ def seed(db_path: Path = DB_PATH) -> dict[str, int]:
         maps = fetch(client, "/maps")
         agents = fetch(client, "/agents", isPlayableCharacter="true")
         weapons = fetch(client, "/weapons")
+        gear = fetch(client, "/gear")
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(db_path)) as conn, conn:
@@ -187,12 +197,19 @@ def seed(db_path: Path = DB_PATH) -> dict[str, int]:
                 ),
             )
 
+        for g in gear:
+            conn.execute(
+                "INSERT INTO gear VALUES (?,?,?,?,?)",
+                (g["uuid"], g["displayName"], g["displayName"].lower(), (g.get("shopData") or {}).get("cost"), g.get("displayIcon")),
+            )
+
     return {
         "maps": n_maps,
         "callouts": n_callouts,
         "agents": len(agents),
         "abilities": n_abilities,
         "weapons": len(weapons),
+        "gear": len(gear),
     }
 
 
@@ -245,6 +262,11 @@ def list_agents() -> list[dict]:
 @app.get("/weapons")
 def list_weapons() -> list[dict]:
     return query("SELECT * FROM weapons ORDER BY cost IS NULL, cost, name")
+
+
+@app.get("/gear")
+def list_gear() -> list[dict]:
+    return query("SELECT * FROM gear ORDER BY cost")
 
 
 # --------------------------------------------------------------------------- #
