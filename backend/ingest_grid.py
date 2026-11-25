@@ -227,6 +227,26 @@ CREATE TABLE IF NOT EXISTS ingest_log (
     message      TEXT
 );
 
+CREATE TABLE IF NOT EXISTS player_rounds (
+    game_id        TEXT NOT NULL,
+    round_number   INTEGER NOT NULL,
+    player_id      TEXT NOT NULL,
+    series_id      TEXT NOT NULL,
+    team_id        TEXT,
+    side           TEXT,
+    agent          TEXT,
+    money_start    INTEGER,  -- credits at buy phase start
+    money_end      INTEGER,  -- credits at buy phase end
+    spent          INTEGER,
+    loadout_value  INTEGER,  -- GRID loadoutValue at buy end
+    armor          INTEGER,  -- currentArmor at buy end (25 light, 50 heavy)
+    weapons        TEXT,     -- comma-separated weapon ids held at buy end, e.g. "classic,operator"
+    primary_weapon TEXT,     -- most expensive non-sidearm held at buy end (NULL = sidearm only)
+    has_spike      INTEGER,
+    PRIMARY KEY (game_id, round_number, player_id)
+);
+CREATE INDEX IF NOT EXISTS idx_player_rounds_series ON player_rounds(series_id);
+
 -- Casts with the ability's name and icon from the asset tables.
 CREATE VIEW IF NOT EXISTS utility_casts_v AS
 SELECT c.*, ab.name AS ability_name, ab.display_icon AS ability_icon
@@ -235,7 +255,7 @@ LEFT JOIN agents a ON a.slug = c.agent
 LEFT JOIN agent_abilities ab ON ab.agent_uuid = a.uuid AND ab.slot = c.api_slot;
 """
 
-GRID_TABLES = ("matches", "games", "game_players", "rounds", "utility_casts", "purchases", "kills")
+GRID_TABLES = ("matches", "games", "game_players", "rounds", "utility_casts", "purchases", "kills", "player_rounds")
 
 SUPPLEMENT_SLOT_TO_API = {
     "ABILITY_1": "Ability1", "ABILITY_2": "Ability2", "GRENADE": "Grenade",
@@ -244,6 +264,7 @@ SUPPLEMENT_SLOT_TO_API = {
 # GRID inventory ids for gear that valorant-api names differently.
 GEAR_ALIASES = {"heavyshield": "heavy armor", "lightshield": "light armor", "regenshield": "regen shield"}
 NOT_PURCHASABLE = {"spike", "melee"}
+SIDEARM_MAX_COST = 800  # Sheriff; anything pricier is a primary weapon
 # A team's reconstructed buys may exceed its credits spent by this much before the buy phase is
 # rejected as an inconsistent snapshot. Real buys run up to ~15% over (current prices vs 2025
 # prices, unrecorded floor pickups); broken snapshots are off by 10x.
@@ -492,6 +513,7 @@ def parse_series(row: dict) -> dict:
 
     casts, kills, purchases = [], [], []
     econ_skipped = 0
+    player_rounds: dict[tuple[str, int, str], dict] = {}  # keyed so a replayed round's last attempt wins
     last_damage: dict[tuple[str, str], str] = {}  # (attacker, victim) -> damage source
 
     for env in iter_jsonl_zst(feed):
@@ -589,6 +611,17 @@ def parse_series(row: dict) -> dict:
                         if not any("shield" in i for i in end_inv) and end_armor > start_armor:
                             shields.append("heavyshield*" if end_armor >= 50 else "lightshield*")
                         buyers[pid] = dict(spent=max(0, start_money - end_money), gained=gained, lost=lost, shields=shields)
+                        held = sorted(i for i in end_inv if i not in NOT_PURCHASABLE)
+                        guns = [(A.item(i)[2] or 0, i) for i in held if A.item(i)[0] == "weapon"]
+                        primary = max(guns)[1] if guns and max(guns)[0] > SIDEARM_MAX_COST else None
+                        player_rounds[(gid, rn, pid)] = dict(
+                            game_id=gid, round_number=rn, player_id=pid, series_id=sid, team_id=team["id"],
+                            side=team.get("side"), agent=agent_of.get((gid, pid)), money_start=start_money,
+                            money_end=end_money, spent=max(0, start_money - end_money),
+                            loadout_value=p.get("loadoutValue"), armor=end_armor,
+                            weapons=",".join(i for i in held if A.item(i)[0] == "weapon") or None,
+                            primary_weapon=primary, has_spike=int("spike" in end_inv),
+                        )
                     team_buys = []
                     for buyer, holder, item, inferred in reconcile_buys(buyers, lambda i: A.item(i)[2]):
                         kind, uuid, cost = A.item(item)
@@ -753,6 +786,8 @@ def parse_series(row: dict) -> dict:
         return out
 
     casts, kills, purchases = keep(casts, "casts"), keep(kills, "kills"), keep(purchases, "purchases")
+    player_rounds_rows = [r for r in player_rounds.values()
+                          if r["game_id"] in kept_games and r["round_number"] is not None]
     for r in (*casts, *kills):
         r["round_time_ms"] = ms_between(buy_end.get((r["game_id"], r["round_number"])), r["occurred_at"])
     # GRID sometimes merges the next map into the previous game (README: "maps that GRID
@@ -801,7 +836,7 @@ def parse_series(row: dict) -> dict:
 
     return dict(
         series_id=sid, match=match, games=games, game_players=roster, rounds=rounds,
-        utility_casts=casts, purchases=purchases, kills=kills,
+        utility_casts=casts, purchases=purchases, kills=kills, player_rounds=player_rounds_rows,
         stats=dict(
             seconds=time.perf_counter() - t0, sessions=session, games=len(games), rounds=len(rounds),
             casts=len(casts), casts_with_supplement=sum(c["supplement_quality"] is not None for c in casts),
@@ -940,6 +975,9 @@ def main() -> None:
                       + (f", skipped buys for {s['econ_skipped_team_rounds']} inconsistent team-round(s)" if s["econ_skipped_team_rounds"] else ""))
 
     filled = backfill_slots(conn)
+    import db_setup  # query indexes + team_rounds (buy tiers) for the API
+
+    db_setup.ensure(conn, force=True)
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     conn.close()
     print(f"\nDone in {time.perf_counter() - t0:.0f}s: " + ", ".join(f"{v} {k}" for k, v in totals.items()))
