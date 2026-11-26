@@ -26,8 +26,8 @@ TacVector turns GRID's event-by-event VALORANT feeds (plus the hackathon's abili
 ## Live demo
 
 > **Live demo:** `https://tacvector.fly.dev`
-
-The hosted demo is password-protected because it serves data derived from the licensed GRID dataset. **The demo login password is provided in the Devpost submission notes.** Enter it in the login screen; it is kept only in that browser tab's `sessionStorage` and sent with each API request as an `X-Demo-Password` header.
+> **Access:** Password-protected for hackathon judging (the demo password is provided in the Devpost submission testing notes).
+> **Cold-Start Note:** To conserve resources between sessions, the Fly.io container automatically stops when idle. If the instance is asleep, the first visit typically takes roughly 15–30 seconds to wake the machine and initialize the ~1.3 GB SQLite database—give the initial load a moment or refresh once if the browser times out while waking.
 
 ---
 
