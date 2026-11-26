@@ -21,3 +21,6 @@ node_modules/
 *.db-wal
 *.db-shm
 *.db-journal
+
+# Frontend build output
+frontend/dist/
