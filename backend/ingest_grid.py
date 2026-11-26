@@ -75,7 +75,7 @@ except ImportError:  # pragma: no cover
     loads = json.loads
 
 BACKEND = Path(__file__).resolve().parent
-DB_PATH = Path(os.environ.get("TACVECTOR_DB", BACKEND / "tacvector.db"))
+DB_PATH = Path(os.environ.get("DB_PATH") or os.environ.get("TACVECTOR_DB") or BACKEND / "tacvector.db")
 DATA_DIR = Path(os.environ.get("STL_DATA_DIR", BACKEND.parent.parent / "stl-hackathon-2026-grid-starter")).resolve()
 
 SCHEMA = """

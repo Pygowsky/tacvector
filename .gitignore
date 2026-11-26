@@ -3,10 +3,6 @@
 stl-hackathon-2026-grid-starter/
 *.zst
 *.jsonl
-*.parquet
-*.sqlite
-*.duckdb
-
 # Decompressed copies or extracts built from the data (adjust to your project)
 *.parquet
 *.sqlite

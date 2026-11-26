@@ -26,7 +26,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 
 API_BASE = "https://valorant-api.com/v1"
-DB_PATH = Path(os.environ.get("TACVECTOR_DB", Path(__file__).resolve().parent / "tacvector.db"))
+DB_PATH = Path(os.environ.get("DB_PATH") or os.environ.get("TACVECTOR_DB") or Path(__file__).resolve().parent / "tacvector.db")
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;

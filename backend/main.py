@@ -16,7 +16,16 @@ team-round is one team's half of one round.
 
 Auth: if DEMO_PASSWORD is set, send either `X-Demo-Password: <password>` or HTTP Basic
 credentials with that password (any username, unless DEMO_USER is also set). If it is
-unset, access is open (local development).
+unset, access is open (local development). 401s carry `WWW-Authenticate: Basic` only for
+plain browser navigation; requests sending X-Demo-Password or `Accept: application/json`
+(the React app) get a bare 401 so the app's LoginModal handles it, not a native popup.
+
+Environment:
+    DB_PATH         SQLite database (default backend/tacvector.db)
+    DEMO_PASSWORD   enable password protection; DEMO_USER optionally pins the Basic username
+    CORS_ORIGINS    comma-separated allowed origins (default *)
+    FRONTEND_DIST   built React app (default frontend/dist). When it exists, it is served at /
+                    and every non-/api path falls back to its index.html (client-side routing).
 """
 
 from __future__ import annotations
@@ -34,11 +43,15 @@ from typing import Iterator
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 import db_setup
 from ability_categories import ABILITY_CATEGORY, CATEGORY_ORDER, NAME_OVERRIDES, OTHER, category_of
 
-DB_PATH = Path(os.environ.get("TACVECTOR_DB", Path(__file__).resolve().parent / "tacvector.db"))
+DB_PATH = db_setup.DB_PATH  # DB_PATH env var, default backend/tacvector.db
+FRONTEND_DIST = Path(
+    os.environ.get("FRONTEND_DIST") or Path(__file__).resolve().parent.parent / "frontend" / "dist"
+).resolve()
 
 BUY_TIERS = {
     "Pistol": "Round 1 or 13 (first round of each half)",
@@ -206,7 +219,13 @@ async def lifespan(_: FastAPI):
     if not DB_PATH.exists():
         raise RuntimeError(f"{DB_PATH} not found: run seed_assets.py and ingest_grid.py first")
     with closing(sqlite3.connect(DB_PATH)) as conn:
-        db_setup.ensure(conn)  # indexes + team_rounds; no-op when current
+        try:
+            db_setup.ensure(conn)  # indexes + team_rounds; no-op when current
+        except sqlite3.OperationalError as exc:
+            # A read-only database (e.g. a :ro Docker volume) is fine if it was prepared already.
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'team_rounds'").fetchone():
+                raise RuntimeError(f"{DB_PATH} has no team_rounds table and can't be updated ({exc}); "
+                                   "run db_setup.py on a writable copy first") from exc
         CATALOG = Catalog(conn)
     yield
 
@@ -245,7 +264,11 @@ def require_demo_auth(request: Request) -> None:
         user_ok = demo_user is None or secrets.compare_digest(user.encode(), demo_user.encode())
         if secrets.compare_digest(pw.encode(), expected) and user_ok:
             return
-    raise HTTPException(401, "Demo password required", headers={"WWW-Authenticate": 'Basic realm="TacVector demo"'})
+    # Only challenge plain browser navigation: a `WWW-Authenticate: Basic` header makes browsers
+    # show their native credentials dialog, which would cover the React LoginModal.
+    wants_json = "application/json" in request.headers.get("accept", "").lower()
+    headers = None if header is not None or wants_json else {"WWW-Authenticate": 'Basic realm="TacVector demo"'}
+    raise HTTPException(401, "Demo password required", headers=headers)
 
 
 def get_db() -> Iterator[sqlite3.Connection]:
@@ -957,3 +980,23 @@ def sniper_summaries(s: Scope, wname: str, res: dict) -> list[str]:
 
 
 app.include_router(api)
+
+
+# --------------------------------------------------------------------------- #
+# Built React frontend (production): registered last so /api routes win
+# --------------------------------------------------------------------------- #
+
+if (FRONTEND_DIST / "index.html").is_file():
+    _INDEX = FRONTEND_DIST / "index.html"
+
+    @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    def frontend(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Not Found")  # unknown API routes stay JSON 404s
+        if path:
+            file = (FRONTEND_DIST / path).resolve()
+            if file.is_file() and file.is_relative_to(FRONTEND_DIST):
+                # Vite fingerprints everything in assets/, so those can be cached forever.
+                cache = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
+                return FileResponse(file, headers={"Cache-Control": cache})
+        return FileResponse(_INDEX, headers={"Cache-Control": "no-cache"})  # SPA fallback

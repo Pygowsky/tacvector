@@ -1,0 +1,23 @@
+# Licensed GRID data and anything derived from it must never enter the build context or image.
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.db-journal
+**/*.sqlite
+**/*.duckdb
+**/*.parquet
+**/*.zst
+**/*.jsonl
+stl-hackathon-2026-grid-starter/
+
+# Local environments and build output (rebuilt inside the image)
+.venv/
+**/__pycache__/
+**/node_modules/
+frontend/dist/
+
+# Tooling noise
+.git/
+.idea/
+.vscode/
+*.log

@@ -22,7 +22,12 @@ import time
 from contextlib import closing
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("TACVECTOR_DB", Path(__file__).resolve().parent / "tacvector.db"))
+# DB_PATH env var overrides the location (TACVECTOR_DB is accepted as a legacy alias).
+DB_PATH = Path(
+    os.environ.get("DB_PATH")
+    or os.environ.get("TACVECTOR_DB")
+    or Path(__file__).resolve().parent / "tacvector.db"
+).expanduser().resolve()
 
 FULL_BUY_MIN = 20_000
 ECO_MAX = 5_000
